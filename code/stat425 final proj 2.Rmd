@@ -1,0 +1,471 @@
+---
+title: "STAT425 Final Project Report"
+author: "Molin Yang"
+date: "2025-12-06"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+### Problem Description
+
+People have inelastic demand for housing. Given that different houses have different features—such as the number of 
+bedrooms, bathrooms, construction materials—we sometimes cannot estimate a house's price directly
+due to the complexity of these features. We can only roughly group houses into a few categories and label 
+as higher -or lower-quality. Hence, it is difficult to verify whether the listed price of a house is reasonable.
+
+The goal of my project is to construct a regression model to estimate an individual house's price
+based on its known characteristics. The resulting estimate can then be compared with the listing price so that buyers can have a 
+better idea of whether the listing price reflects the true value of the house.
+
+
+### Data Description
+
+```{r data_cleaning, include = FALSE}
+## load data
+dat = read.csv("kc_house_data.csv", header = TRUE)
+
+## remove redundant columns and remove NA values
+dat = dat[ , -c(1, 2, 16:21)]
+dat = na.omit(dat)
+
+## check the length of each column is the same after data cleaning
+sapply(dat, length) ## all columns have 21613 non-NA entries -> we can proceed
+```
+In this project I want to focus on the housing market in a large city.
+Because the estimation relies on past sales data, I selected a dataset with large observations to stabilize the predictors
+and make the model's prediction results more convincing. I also preferred a dataset with a large number
+of variables so that I can fit a full model and select useful predictors. 
+I found a suitable dataset on Kaggle (Harlfoxem, 2016), which includes 21,613 housing sales recorded between May 2014 and May 2015 in King County, USA, 
+where Seattle is located, along with 20 variables. 
+
+The response variable is the house sale price. The variables include the number of bedrooms, number of bathrooms, 
+size of the above-ground area (sqft), land size (sqft), livingroom size (sqft), number of floors, overall grade of property (ranging from 1 to 13, 
+based on construction material and architectural design quality), view score (ranging from 1 to 5), and year it 
+was built. There are some irrelevant features such as the longitude, latitude, and the sale date of the house.
+
+Most predictors are numerical (discrete or continuous), and the rest are ordinal or categorical. Before modeling, 
+I cleaned the data by removing irrelevant variables. I also omitted observations with missing values. 
+
+
+
+### Methodology and Statistical Approach
+
+#### Multiple Linear Regression (OLS Method):
+```{r original_full_model, include = FALSE}
+library(MASS)
+library(lmtest)
+
+
+## fit original full model
+fullmodel = lm(price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat)
+
+
+
+## identify and remove outliers using mean shift test 
+## (df = n-p-1, p: # of predictors excluding intercept)
+
+n = dim(dat)[1]
+tvals = sort(abs(rstudent(fullmodel)), decreasing = TRUE)
+## we might need to clean 107 obs as outliers
+
+mean.shift.test.threshold = abs(qt(0.05/(n * 2), 21601))
+
+outliers = which(abs(tvals) > mean.shift.test.threshold)
+dat = dat[-outliers, ]
+```
+
+I first fitted a multiple linear regression model using the OLS method. 
+I selected number of bedrooms, number of bathrooms, livingroom size, land size, above-ground area size, years built, number of floors, waterfront, 
+view, condition, and grade as predictors. I then used the mean shift test with 21601 degrees of freedom to
+detect outliers and removed these observations from the dataset. This ensures that the regression results 
+are not affected by extreme values and can perform better in estimating housing prices.
+
+
+
+```{r linearity, include = FALSE}
+## linearity check
+sr.trans = boxcox(fullmodel, lambda = seq(-2, 2, length = 500)) 
+sr.trans$x[sr.trans$y == max(sr.trans$y)] ## need log transformation
+
+
+## log transformation to response variable
+dat$log_price = log(dat$price)
+dat = dat[ , -1]
+## fit the full model again using log(price) as response variable
+fullmodel.log = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, data = dat)
+```
+The next step is to conduct model diagnostics. 
+The first assumption I checked is the linearity assumption. I used the
+boxcox function in the MASS library to find the optimal $\lambda$ value for this model. The result is $\lambda_{opt} \approx 0.1$.
+Since this value is close to zero, a log transformation is preferred. I applied log function to the housing prices and fitted the
+model again using the log-transformed housing prices as the response variable, and the linearity problem was addressed.
+
+
+
+
+```{r normality, echo = FALSE, fig.width=4, fig.height=3, out.width="50%", fig.align="center"}
+## check normality assumption of the error term
+plot(fullmodel.log, which = 2, sub = "") ## normality assumption of error term satisfied
+```
+The second assumption I checked is the normality assumption of the error term. Displayed above is the  
+Q-Q plot. The points fall roughly along a straight line, indicating that the normality assumption is satisfied.
+
+
+
+```{r homoscedasticity, include = FALSE}
+## check constant variance assumption of the error term
+plot(fullmodel.log, which = 1)
+bptest(fullmodel.log) ## heteroscedasticity problem exists and needed to be improved
+```
+The third assumption I checked is the constant variance assumption of the error term. I performed the BP test, and found
+the p-value was less than 0.05, indicating the presence of heteroscedasticity problem, which needs to be addressed with a better model. 
+
+
+
+```{r multicollinearity, include = FALSE}
+## multicollinearity check
+x = model.matrix(fullmodel.log)
+x = x[ , -1]
+x = x - matrix(apply(x, 2, mean), 21506, 11, byrow = TRUE)
+x = x / matrix(apply(x, 2, sd), 21506, 11, byrow = TRUE)
+e = eigen(t(x) %*% x)
+sqrt(e$val[1] / e$val)
+## k-values all less than 30. Multicollinearity problem is not a concern
+
+summary(fullmodel.log)
+```
+The fourth assumption I checked is whether multicollinearity exists. I first constructed the 
+$X$ matrix, then centered and standardized the predictors, computed eigenvalues of $X^TX$, and used them to calculate the k-values.
+Since the largest k-value is 7.6296, which is less than 30, multicollinearity is not a concern.
+
+
+Before moving on to build a better model, I will present the results of this multiple linear regression model using the OLS method:
+$$
+\begin{aligned}
+\widehat{\log(\text{price})}
+=\, & 21.23
+\; - 0.02269 N_{beds}
+\; + 0.07634 N_{baths}
+\; + 2.116\!\times\!10^{-4} S_{living} \\
+& - 2.039\!\times\!10^{-8}\,S_{land}
+\; - 6.308\!\times\!10^{-5}\,S_{above}
+\; - 5.40\!\times\!10^{-3}\, T_{built} \\
+& + 0.1048\,N_{floors}
+\; + 0.3350\,\text{Water}
+\; + 0.04722\,\text{View} \\
+& + 0.04080\,\text{condition}
+\; + 0.2277\,\text{grade}.
+\end{aligned}
+$$
+This model has $R_{adj}^2 = 0.6467$ and all predictors are significant except land size.
+
+
+
+#### Multiple Linear Regression (WLS Method) and Variable Selection:
+
+```{r solving_heteroscedasticity_using_WLS, include=FALSE}
+## build weight
+e2 <- residuals(fullmodel.log)^2
+var.model <- lm(log(e2) ~ bedrooms + bathrooms + sqft_living + sqft_lot +
+                 sqft_above + yr_built + floors + 
+                 waterfront + view + condition + grade,
+                 data = dat)
+pred.var <- exp(predict(var.model))
+w <- 1 / pred.var
+
+
+
+## fit full model using WLS method to address heteroscedasticity problem
+wls.model = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w)
+
+
+## multicollinearity check
+x = model.matrix(wls.model)
+x = x[ , -1]
+x = x - matrix(apply(x, 2, mean), 21506, 11, byrow = TRUE)
+x = x / matrix(apply(x, 2, sd), 21506, 11, byrow = TRUE)
+e = eigen(t(x) %*% x)
+sqrt(e$val[1] / e$val)
+## k-values all less than 30. Multicollinearity problem is not a concern
+
+summary(wls.model)
+```
+
+
+Since the multiple linear model using the OLS method faced heteroscedasticity problem, the model is still unbiased, 
+but its standard errors become unreliable. This can result in inefficient OLS estimators and less accurate results in
+high-variance regions. To address this problem, I used the WLS method to construct my second model with the same
+predictor variables.
+I modeled the log-squared residuals from the OLS model to estimate how the error variance changes with predictors. The predicted
+variances were then exponentiated and inverted to obtain the WLS weights. $w_i = \frac{1}{\hat\sigma^2_i}$.
+Therefore, observations with larger variance or larger OLS residuals receive smaller weights in this new model.
+Model diagnostics were applied to the second model, and all the model assumptions were satisfied. 
+Therefore, we can perform variable selection and find the best model.
+
+I used the leaps and bounds method to select variables.
+By graphing out the 11 model candidates' $R^2_{adj}$, Mallow's Cp, AIC, and BIC (detailed values are provided in the appendix), It 
+is clear that the model with 10 variables has the smallest Mallow's Cp, AIC, and BIC values. It has the same $R^2_{adj}$
+as the full model:
+
+```{r use_leaps_and_bounds_to_select_predictors, include = FALSE}
+## we want to use leaps and bounds method to see whether we can produce a more concise model
+library(leaps)
+
+
+l.and.b = regsubsets(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w, nvmax = 11)
+
+rs = summary(l.and.b)
+rs$which
+```
+
+```{r, echo = FALSE, fig.width=4, fig.height=4, fig.align="center"}
+n = dim(dat)[1]
+msize = 1:11
+
+Aic = n * log(rs$rss/n) + 2*msize
+Bic = n * log(rs$rss/n) + msize*log(n)
+
+par(mfrow = c(2, 2))
+plot(msize, rs$adjr2, xlab = "Number of parameters", ylab = "Adjusted Rˆ2")
+plot(msize, rs$cp, xlab = "Number of parameters", ylab = "Mallow's Cp")
+plot(msize, Aic, xlab = "Number of parameters", ylab = "AIC")
+plot(msize, Bic, xlab = "Number of parameters", ylab = "BIC")
+```
+
+```{r, include = FALSE}
+model_sizes = c(9, 10, 11)
+
+df_summary = data.frame(
+  ModelSize = model_sizes,
+  AdjR2 = rs$adjr2[model_sizes],
+  Cp = rs$cp[model_sizes],
+  AIC = Aic[model_sizes],
+  BIC = Bic[model_sizes]
+)
+
+df_summary
+```
+
+We conclude that this model is the best model, and the variable omitted is land size. 
+
+
+
+```{r final_model, include = FALSE}
+wls.model.new = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w)
+summary(wls.model.new)
+```
+
+I fitted the model again with the remaining 10 variables. The resulting model is:
+$$
+\begin{aligned}
+\widehat{\log(\text{price})}
+=\, & 20.96
+\; - 0.02367 N_{beds}
+\; + 0.07121 N_{baths}
+\; + 2.192\!\times\!10^{-4} S_{living} 
+\; - 7.258\!\times\!10^{-5}\,S_{above}\\
+& - 5.262\!\times\!10^{-3}\, T_{built}
+\; + 0.148\,N_{floors}
+\; + 0.3316\,\text{Water}
+\; + 0.04621\,\text{View}
+\; + 0.04218\,\text{condition}
+\; + 0.2261\,\text{grade}.
+\end{aligned}
+$$
+
+This model has $R_{adj}^2 = 0.648$, a slight increase compared to model 1.
+However, this model successfully addressed heteroscedasticity problem and all predictors are significant, 
+so model 2 is more desirable than model 1.
+
+### Interpretation and Insight
+
+The WLS model after variable selection shows that bathrooms, floors, water proximity,
+and overall construction and architectural design quality are stronger predictors of housing prices in Seattle. 
+The log transformation and WLS method have improved the reliability of the inference. 
+This model can therefore help potential buyers to better understand the true value of a property. A comparison between predicted and
+listed prices is possible, enabling buyers to discern mispricing.
+
+However, this model still has limitations. The major problem is the data are outdated. Since the sales were recorded about
+a decade ago, the results may not precisely reflect today's market. Although adjusting the intercept could correct the overall inflation, 
+a desirable dataset for today's Seattle house sales is not available. In addition, the model is limited to predicting Seattle housing prices
+and cannot generalize to other regions because housing market vary across states.
+
+### Citations and Ethics
+
+Harlfoxem. (2016). House Sales in King County, USA [Data set]. Kaggle. 
+
+https://www.kaggle.com/datasets/harlfoxem/housesalesprediction
+
+### Appendix
+```{r}
+## load data
+dat = read.csv("kc_house_data.csv", header = TRUE)
+
+## remove redundant columns and remove NA values
+dat = dat[ , -c(1, 2, 16:21)]
+dat = na.omit(dat)
+
+## check the length of each column is the same after data cleaning
+sapply(dat, length) ## all columns have 21613 non-NA entries -> we can proceed
+```
+
+```{r}
+library(MASS)
+library(lmtest)
+
+
+## fit original full model
+fullmodel = lm(price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat)
+
+
+
+## identify and remove outliers using mean shift test 
+## (df = n-p-1, p: # of predictors excluding intercept)
+
+n = dim(dat)[1]
+tvals = sort(abs(rstudent(fullmodel)), decreasing = TRUE)
+## we might need to clean 107 obs as outliers
+
+mean.shift.test.threshold = abs(qt(0.05/(n * 2), 21601))
+
+outliers = which(abs(tvals) > mean.shift.test.threshold)
+dat = dat[-outliers, ]
+```
+
+```{r}
+## linearity check
+sr.trans = boxcox(fullmodel, lambda = seq(-2, 2, length = 500)) 
+sr.trans$x[sr.trans$y == max(sr.trans$y)] ## need log transformation
+
+
+## log transformation to response variable
+dat$log_price = log(dat$price)
+dat = dat[ , -1]
+## fit the full model again using log(price) as response variable
+fullmodel.log = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, data = dat)
+```
+
+```{r}
+## check normality assumption of the error term
+plot(fullmodel.log, which = 2, sub = "") ## normality assumption of error term satisfied
+```
+
+```{r}
+## check constant variance assumption of the error term
+plot(fullmodel.log, which = 1)
+bptest(fullmodel.log) ## heteroscedasticity problem exists and needed to be improved
+```
+
+```{r}
+## multicollinearity check
+x = model.matrix(fullmodel.log)
+x = x[ , -1]
+x = x - matrix(apply(x, 2, mean), 21506, 11, byrow = TRUE)
+x = x / matrix(apply(x, 2, sd), 21506, 11, byrow = TRUE)
+e = eigen(t(x) %*% x)
+sqrt(e$val[1] / e$val)
+## k-values all less than 30. Multicollinearity problem is not a concern
+
+summary(fullmodel.log)
+```
+
+```{r}
+## build weight
+e2 <- residuals(fullmodel.log)^2
+var.model <- lm(log(e2) ~ bedrooms + bathrooms + sqft_living + sqft_lot +
+                 sqft_above + yr_built + floors + 
+                 waterfront + view + condition + grade,
+                 data = dat)
+pred.var <- exp(predict(var.model))
+w <- 1 / pred.var
+
+
+
+## fit full model using WLS method to address heteroscedasticity problem
+wls.model = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w)
+
+
+## multicollinearity check
+x = model.matrix(wls.model)
+x = x[ , -1]
+x = x - matrix(apply(x, 2, mean), 21506, 11, byrow = TRUE)
+x = x / matrix(apply(x, 2, sd), 21506, 11, byrow = TRUE)
+e = eigen(t(x) %*% x)
+sqrt(e$val[1] / e$val)
+## k-values all less than 30. Multicollinearity problem is not a concern
+
+summary(wls.model)
+```
+
+```{r}
+## we want to use leaps and bounds method to see whether we can produce a more concise model
+library(leaps)
+
+
+l.and.b = regsubsets(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_lot + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w, nvmax = 11)
+
+rs = summary(l.and.b)
+rs$which
+```
+
+```{r}
+n = dim(dat)[1]
+msize = 1:11
+
+Aic = n * log(rs$rss/n) + 2*msize
+Bic = n * log(rs$rss/n) + msize*log(n)
+
+par(mfrow = c(2, 2))
+plot(msize, rs$adjr2, xlab = "Number of parameters", ylab = "Adjusted Rˆ2")
+plot(msize, rs$cp, xlab = "Number of parameters", ylab = "Mallow's Cp")
+plot(msize, Aic, xlab = "Number of parameters", ylab = "AIC")
+plot(msize, Bic, xlab = "Number of parameters", ylab = "BIC")
+```
+
+```{r}
+model_sizes = c(9, 10, 11)
+
+df_summary = data.frame(
+  ModelSize = model_sizes,
+  AdjR2 = rs$adjr2[model_sizes],
+  Cp = rs$cp[model_sizes],
+  AIC = Aic[model_sizes],
+  BIC = Bic[model_sizes]
+)
+
+df_summary
+```
+
+```{r}
+wls.model.new = lm(log_price ~ bedrooms + bathrooms + 
+            sqft_living + sqft_above + 
+            yr_built + floors + waterfront + view + condition + grade, 
+            data = dat, weights = w)
+summary(wls.model.new)
+```
