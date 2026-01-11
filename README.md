@@ -39,23 +39,3 @@ The modeling process includes the following steps:
 ## Results
 The final selected model achieved improved predictive performance and better adherence to regression assumptions compared to the baseline OLS model.  
 
-## Tools
-- **Programming Language:** R
-- **Statistical Libraries:** MASS, car, leaps, glmnet
-- **Visualization:** ggplot2
-- **Reproducibility:** R Markdown
-
-## Repository Structure
-```text
-king-county-housing-price-modeling/
-├── data/
-│   └── README.md
-├── scripts/
-│   ├── data_cleaning.R
-│   ├── modeling_ols.R
-│   ├── diagnostics.R
-│   └── variable_selection.R
-├── figures/
-├── README.md
-└── .gitignore
-
